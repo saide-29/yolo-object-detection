@@ -13,7 +13,7 @@ while True:
 
     start_time = time.time()
 
-    results = model(frame)[0]    #the model works
+    results = model.track(frame , tracker="bytetrack.yaml")[0]    #the model works and memory
 
    
 
@@ -25,10 +25,31 @@ while True:
 
         if name in ["car", "person"]:
             filtered_boxes.append(box)
+        
+        
 
     results.boxes = filtered_boxes
 
     annotated_frame = results.plot()
+
+    
+    frame_height = frame.shape[0] #shape (H,W,R)
+
+    for box in filtered_boxes:
+
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+        height = y2 - y1
+
+        if height > frame_height * 0.35:
+        
+            cv2.putText(annotated_frame,
+                "WARNING",
+                (10, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2,
+                (0, 0, 255),
+                3)
 
     ends_time = time.time()
 
@@ -44,6 +65,9 @@ while True:
             2)
 
     cv2.imshow("Filtered Detection", annotated_frame)
+
+    
+    
 
     if cv2.waitKey(1) == 27:
         break
