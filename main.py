@@ -1,6 +1,7 @@
 from ultralytics import YOLO
 import cv2
 import time
+import numpy as np
 
 model = YOLO("yolov8n.pt")
 
@@ -10,6 +11,27 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    height = edges.shape[0]
+    mask = np.zeros_like(edges)
+    mask[height//2:, :] = 255
+    roi = cv2.bitwise_and(edges, mask)
+
+    lines = cv2.HoughLinesP(roi, 1, np.pi / 180, 50, minLineLength=40, maxLineGap=100) #return cordinats x1 y1 x2 y2
+
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0] # [[]] -> []
+            cv2.line(frame, (x1,y1), (x2,y2), (0,255,0), 5)
+
+
+
+
+   
+
+
 
     start_time = time.time()
 
@@ -64,7 +86,12 @@ while True:
             (0, 255, 0),
             2)
 
-    cv2.imshow("Filtered Detection", annotated_frame)
+    cv2.imshow("Lane_Detection", frame)
+    #cv2.imshow("Roi", roi)
+    #cv2.imshow("Edges", edges)
+    #cv2.imshow("Filtered Detection", annotated_frame)
+    #cv2.imshow("gray_frame", gray) gray format
+
 
     
     
