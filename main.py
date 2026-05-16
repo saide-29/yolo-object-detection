@@ -4,12 +4,12 @@ import time
 import numpy as np
 
 
-
 # LOAD YOLO MODEL
 model = YOLO("yolov8n.pt")
 
-# OPEN CAMERA
-cap = cv2.VideoCapture(0)
+# OPEN VIDEO
+cap = cv2.VideoCapture("road.mp4")
+
 
 # PREVIOUS LEFT LANE VALUES
 prev_left_x1 = 0
@@ -23,26 +23,32 @@ prev_right_y1 = 0
 prev_right_x2 = 0
 prev_right_y2 = 0
 
+
 while True:
 
     # START FPS TIMER
     start_time = time.time()
 
-    # READ CAMERA FRAME
+    # READ FRAME
     ret, frame = cap.read()
 
     if not ret:
         break
 
-    # YOLO OBJECT DETECTION + BYTE TRACKING
+    # RESIZE FRAME
+    frame = cv2.resize(frame, (960, 540))
+
+
+    # ================= YOLO DETECTION =================
+
     results = model.track(
         frame,
         tracker="bytetrack.yaml"
     )[0]
 
-    # FILTER ONLY CAR + PERSON
     filtered_boxes = []
 
+    # FILTER ONLY CAR + PERSON
     for box in results.boxes:
 
         cls = int(box.cls[0])
@@ -51,52 +57,63 @@ while True:
         if name in ["car", "person"]:
             filtered_boxes.append(box)
 
-
     results.boxes = filtered_boxes
 
     # DRAW YOLO BOXES
     annotated_frame = results.plot()
 
-    # COLLISION WARNING SYSTEM
+
+    # ================= COLLISION WARNING =================
+
     frame_height = frame.shape[0]
 
     for box in filtered_boxes:
 
         x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-        height = y2 - y1
+        object_height = y2 - y1
 
-        # Object too close
-        if height > frame_height * 0.35:
+        # OBJECT TOO CLOSE
+        if object_height > frame_height * 0.35:
 
             cv2.putText(
                 annotated_frame,
                 "WARNING",
-                (10, 100),
+                (10, 70),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                2,
+                1,
                 (0, 0, 255),
-                3
+                2
             )
 
-    # LANE DETECTION PREPROCESSING
-    
-    # Convert to grayscale
+
+    # ================= LANE DETECTION =================
+
+    # GRAYSCALE
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # Edge detection
+
+    # EDGE DETECTION
     edges = cv2.Canny(gray, 50, 150)
-    # CREATE ROI MASK
+
+    # ROI MASK
     height = edges.shape[0]
 
     mask = np.zeros_like(edges)
 
-    # Only lower half of image
-    mask[height // 2:, :] = 255
+    polygon = np.array([[
+        (0, height),
+        (frame.shape[1], height),
+        (frame.shape[1] // 2 + 150, height // 2),
+        (frame.shape[1] // 2 - 150, height // 2)
+    ]], np.int32)
+
+    cv2.fillPoly(mask, polygon, 255)
 
     roi = cv2.bitwise_and(edges, mask)
 
-    # HOUGH LINE DETECTION
-   
+
+    # ================= HOUGH LINE DETECTION =================
+
     lines = cv2.HoughLinesP(
         roi,
         1,
@@ -105,8 +122,10 @@ while True:
         minLineLength=40,
         maxLineGap=100
     )
-    # LEFT / RIGHT LANE CLASSIFICATION
-    
+
+
+    # ================= LEFT / RIGHT CLASSIFICATION =================
+
     left_line = []
     right_line = []
 
@@ -116,153 +135,246 @@ while True:
 
             x1, y1, x2, y2 = line[0]
 
-            # avoid division by zero
+            # AVOID DIVISION BY ZERO
             if x2 - x1 == 0:
                 continue
 
-            # line slope
+            # LINE SLOPE
             slope = (y2 - y1) / (x2 - x1)
 
-            # ignore horizontal lines
-            if abs(slope) < 0.5:
+            # IGNORE HORIZONTAL + EXTREME LINES
+            if abs(slope) < 0.5 or abs(slope) > 2:
                 continue
 
-            # left lane
-            if slope < 0:
+            mid_x = frame.shape[1] // 2
+
+            # LEFT LANE
+            if slope < 0 and x1 < mid_x:
                 left_line.append(line)
 
-            # right lane
-            else:
+            # RIGHT LANE
+
+            elif slope > 0.4 and x1 > mid_x:
                 right_line.append(line)
-
-        left_x1 = []
-        left_y1 = []
-        left_x2 = []
-        left_y2 = []
-
-        for line in left_line:
-
-            x1, y1, x2, y2 = line[0]
-
-            left_x1.append(x1)
-            left_y1.append(y1)
-            left_x2.append(x2)
-            left_y2.append(y2)
-
-        right_x1 = []
-        right_y1 = []
-        right_x2 = []
-        right_y2 = []
-
-        for line in right_line:
-
-            x1, y1, x2, y2 = line[0]
-
-            right_x1.append(x1)
-            right_y1.append(y1)
-            right_x2.append(x2)
-            right_y2.append(y2)
-
-
-        if len(left_x1) > 0 and len(right_x1) > 0:
             
-            # LANE AVERAGING
+               
             
-            avg_x1l = int(sum(left_x1) / len(left_x1))
-            avg_y1l = int(sum(left_y1) / len(left_y1))
-            avg_x2l = int(sum(left_x2) / len(left_x2))
-            avg_y2l = int(sum(left_y2) / len(left_y2))
-
-            avg_x1r = int(sum(right_x1) / len(right_x1))
-            avg_y1r = int(sum(right_y1) / len(right_y1))
-            avg_x2r = int(sum(right_x2) / len(right_x2))
-            avg_y2r = int(sum(right_y2) / len(right_y2))
-
-
-            # TEMPORAL SMOOTHING
+        
+               
            
-            avg_x1l = int(0.8 * prev_left_x1 + 0.2 * avg_x1l)
-            avg_y1l = int(0.8 * prev_left_y1 + 0.2 * avg_y1l)
-            avg_x2l = int(0.8 * prev_left_x2 + 0.2 * avg_x2l)
-            avg_y2l = int(0.8 * prev_left_y2 + 0.2 * avg_y2l)
+               
 
-            avg_x1r = int(0.8 * prev_right_x1 + 0.2 * avg_x1r)
-            avg_y1r = int(0.8 * prev_right_y1 + 0.2 * avg_y1r)
-            avg_x2r = int(0.8 * prev_right_x2 + 0.2 * avg_x2r)
-            avg_y2r = int(0.8 * prev_right_y2 + 0.2 * avg_y2r)
+                    
+                
+
+# Ignore very right region (cars)
+            if x1 > frame.shape[1] * 0.90:
+                continue
+
+            if y1 < frame.shape[0] * 0.55:
+                continue
+    # ================= LEFT LANE FITTING =================
+
+    left_x = []
+    left_y = []
+
+    for line in left_line:
+
+        x1, y1, x2, y2 = line[0]
+
+        left_x.extend([x1, x2])
+        left_y.extend([y1, y2])
+
+    if len(left_x) > 0:
+
+        # LINE FITTING
+        left_fit = np.polyfit(left_y, left_x, 1)
+
+        # START / END HEIGHT
+        y1 = frame.shape[0]
+        y2 = int(frame.shape[0] * 0.8)
+
+        # CALCULATE X VALUES
+        x1 = int(left_fit[0] * y1 + left_fit[1])
+        x2 = int(left_fit[0] * y2 + left_fit[1])
+
+        # TEMPORAL SMOOTHING
+        left_x1 = int(0.8 * prev_left_x1 + 0.2 * x1)
+        left_y1 = int(0.8 * prev_left_y1 + 0.2 * y1)
+
+        left_x2 = int(0.8 * prev_left_x2 + 0.2 * x2)
+        left_y2 = int(0.8 * prev_left_y2 + 0.2 * y2)
+
+        # UPDATE PREVIOUS VALUES
+        prev_left_x1 = left_x1
+        prev_left_y1 = left_y1
+
+        prev_left_x2 = left_x2
+        prev_left_y2 = left_y2
+
+        # DRAW LEFT LANE
+        cv2.line(
+            annotated_frame,
+            (left_x1, left_y1),
+            (left_x2, left_y2),
+            (255, 0, 0),
+            5
+        )
 
 
-            # update previous values
-            prev_left_x1 = avg_x1l
-            prev_left_y1 = avg_y1l
-            prev_left_x2 = avg_x2l
-            prev_left_y2 = avg_y2l
+    # ================= RIGHT LANE FITTING =================
 
-            prev_right_x1 = avg_x1r
-            prev_right_y1 = avg_y1r
-            prev_right_x2 = avg_x2r
-            prev_right_y2 = avg_y2r
+    right_x = []
+    right_y = []
 
-            # LANE AREA POLYGON
-            points = np.array([
-                [avg_x1l, avg_y1l],
-                [avg_x2l, avg_y2l],
-                [avg_x2r, avg_y2r],
-                [avg_x1r, avg_y1r]
-            ])
+    for line in right_line:
 
-            cv2.fillPoly(
+        x1, y1, x2, y2 = line[0]
+
+        right_x.extend([x1, x2])
+        right_y.extend([y1, y2])
+
+    if len(right_x) > 0:
+
+        # LINE FITTING
+        right_fit = np.polyfit(right_y, right_x, 1)
+
+        # START / END HEIGHT
+        y1 = frame.shape[0]
+        y2 = int(frame.shape[0] * 0.8)
+
+        # CALCULATE X VALUES
+        x1 = int(right_fit[0] * y1 + right_fit[1])
+        x2 = int(right_fit[0] * y2 + right_fit[1])
+
+        # TEMPORAL SMOOTHING
+        right_x1 = int(0.8 * prev_right_x1 + 0.2 * x1)
+        right_y1 = int(0.8 * prev_right_y1 + 0.2 * y1)
+
+        right_x2 = int(0.8 * prev_right_x2 + 0.2 * x2)
+        right_y2 = int(0.8 * prev_right_y2 + 0.2 * y2)
+
+        # UPDATE PREVIOUS VALUES
+        prev_right_x1 = right_x1
+        prev_right_y1 = right_y1
+
+        prev_right_x2 = right_x2
+        prev_right_y2 = right_y2
+
+        # DRAW RIGHT LANE
+        cv2.line(
+            annotated_frame,
+            (right_x1, right_y1),
+            (right_x2, right_y2),
+            (0, 255, 0),
+            5
+        )
+
+
+    # ================= LANE AREA + STEERING =================
+
+    if len(left_x) > 0 and len(right_x) > 0:
+
+        # POLYGON POINTS
+        points = np.array([
+
+            [left_x1, left_y1],
+            [left_x2, left_y2],
+            [right_x2, right_y2],
+            [right_x1, right_y1]
+
+        ])
+
+        # TRANSPARENT OVERLAY
+        transparent = annotated_frame.copy()
+
+        # FILL POLYGON
+        cv2.fillPoly(
+            transparent,
+            [points],
+            (0, 255, 0)
+        )
+
+        # APPLY TRANSPARENCY
+        annotated_frame = cv2.addWeighted(
+            transparent,
+            0.30,
+            annotated_frame,
+            0.70,
+            0
+        )
+
+        # LANE CENTER
+        lane_center = ((left_x1 + left_x2) // 2 + (right_x1 + right_x2) // 2) // 2
+
+        # FRAME CENTER
+        frame_center = frame.shape[1] // 2
+
+
+        # ================= LANE DEPARTURE =================
+
+        if abs(lane_center - frame_center) > 10:
+
+            cv2.putText(
                 annotated_frame,
-                [points],
-                (0, 255, 0)
+                "WARNING: Lane Departure",
+                (10, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
             )
 
 
-            # DRAW LANE LINES
-            
-            cv2.line(
+        # ================= STEERING ESTIMATION =================
+
+        # TURN LEFT
+        if lane_center < frame_center - 20:
+
+            cv2.putText(
                 annotated_frame,
-                (avg_x1l, avg_y1l),
-                (avg_x2l, avg_y2l),
-                (255, 0, 0),
-                5
+                "TURN LEFT",
+                (10, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
             )
 
-            cv2.line(
+        # TURN RIGHT
+        elif lane_center > frame_center + 20:
+
+            cv2.putText(
                 annotated_frame,
-                (avg_x1r, avg_y1r),
-                (avg_x2r, avg_y2r),
+                "TURN RIGHT",
+                (10, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
+            )
+
+        # CENTER
+        else:
+
+            cv2.putText(
+                annotated_frame,
+                "CENTER",
+                (10, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
                 (0, 255, 0),
-                5
+                2
             )
 
-            # LANE DEPARTURE WARNING
-           
-            lane_center = (avg_x1l + avg_x1r) // 2
 
-            frame_center = frame.shape[1] // 2
+    # ================= FPS =================
 
-            if abs(lane_center - frame_center) > 10:
-
-                cv2.putText(
-                    annotated_frame,
-                    "WARNING: Lane Departure",
-                    (50, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 0, 255),
-                    3
-                )
-
-
-    # FPS CALCULATION
-   
     end_time = time.time()
 
     processing_time = end_time - start_time
 
     fps = 1 / processing_time
-
 
     cv2.putText(
         annotated_frame,
@@ -275,14 +387,16 @@ while True:
     )
 
 
+    # ================= SHOW FRAME =================
+
     cv2.imshow("Mini_ADAS_System", annotated_frame)
 
 
-    # Exit with ESC
+    # EXIT WITH ESC
     if cv2.waitKey(1) == 27:
         break
 
+
 # RELEASE RESOURCES
 cap.release()
-
 cv2.destroyAllWindows()
